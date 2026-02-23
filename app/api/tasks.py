@@ -746,7 +746,7 @@ class TaskAssetsImport(APIView):
                                             status=status_codes.RUNNING,
                                             pending_action=pending_actions.IMPORT)
             task.create_task_directories()
-            asset_file = task.assets_path("all.zip")
+            destination_file = task.assets_path("all.zip")
 
             # Non-chunked file import
             if tmp_upload_file is None and len(files) > 0:
