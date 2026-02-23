@@ -270,6 +270,14 @@ pre.prettyprint:focus,
 	border-color: {% scalebyiv theme_highlight 0.8 %};
 }
 
+.theme-border-highlight-7-hover:hover{
+	border-color: {% scalebyiv theme_highlight 0.7 %};
+}
+
+.theme-background-hightlight-hover:hover{
+	background-color: {% scalebyiv theme_highlight 0.98 %};
+}
+
 /* Dialog warning */
 .alert-warning{
 	border-color: {{ theme_dialog_warning }};

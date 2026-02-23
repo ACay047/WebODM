@@ -721,7 +721,7 @@ class ProjectListItem extends React.Component {
                 </button>
                 <ul className="dropdown-menu import-dropdown">
                   <li><a href="javascript:void(0)" onClick={this.handleImportTask}><i className={"far fa-file-archive fa-fw"}></i> {_("Assets / Backups")}</a></li>
-                  <li><a href="javascript:void(0)" onClick={this.handleImportExternal}><i className={"fas fa-database fa-fw"}></i> {_("External Data")}</a></li>
+                  <li><a href="javascript:void(0)" onClick={this.handleImportExternal}><i className={"fa fa-cloud-upload-alt fa-fw"}></i> {_("External Data")}</a></li>
                   {this.state.importItems.length ? 
                     this.state.importItems.map((item, i) => <React.Fragment key={i}>{item}</React.Fragment>)
                   : ""}

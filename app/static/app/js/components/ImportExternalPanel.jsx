@@ -5,143 +5,304 @@ import Dropzone from '../vendor/dropzone';
 import csrf from '../django/csrf';
 import ErrorMessage from './ErrorMessage';
 import UploadProgressBar from './UploadProgressBar';
-import { _, interpolate } from '../classes/gettext';
-import Trans from './Trans';
+import { _ } from '../classes/gettext';
+import $ from 'jquery';
+
+const ASSET_TYPES = [
+  { key: 'orthophoto', label: _('Orthophoto'), icon: 'fa fa-map', accept: '.tif', mimeTypes: 'image/tiff' },
+  { key: 'dsm', label: _('Surface Model'), icon: 'fa fa-chart-area', accept: '.tif', mimeTypes: 'image/tiff' },
+  { key: 'dtm', label: _('Terrain Model'), icon: 'fa fa-chart-area', accept: '.tif', mimeTypes: 'image/tiff' },
+  { key: 'pointcloud', label: _('Point Cloud'), icon: 'fa fa-braille', accept: '.laz', mimeTypes: '.laz' },
+  { key: 'texturedmodel', label: _('Textured Model'), icon: 'fab fa-connectdevelop', accept: '.glb', mimeTypes: '.glb' }
+];
 
 class ImportExternalPanel extends React.Component {
-  static defaultProps = {
-  };
+  static defaultProps = {};
 
   static propTypes = {
-      onImported: PropTypes.func.isRequired,
-      onCancel: PropTypes.func,
-      projectId: PropTypes.number.isRequired
+    onImported: PropTypes.func.isRequired,
+    onCancel: PropTypes.func,
+    projectId: PropTypes.number.isRequired
   };
 
-  constructor(props){
+  constructor(props) {
     super(props);
-
     this.state = {
       error: "",
       uploading: false,
-      importingFromUrl: false,
       progress: 0,
-      bytesSent: 0,
+      totalBytes: 0,
+      totalBytesSent: 0,
+      files: {}
     };
+    this.dropzones = {};
+    this.dzInstances = {};
+    this.uploadSessionId = null;
+    this.fileProgress = {};
   }
 
-  defaultTaskName = () => {
-    return `Task of ${new Date().toISOString()}`;
-  }
-
-  componentDidMount(){
+  componentDidMount() {
     Dropzone.autoDiscover = false;
+    ASSET_TYPES.forEach(asset => this.initDropzone(asset));
+  }
 
-    if (this.dropzone){
-      this.dz = new Dropzone(this.dropzone, {
-          paramName: "file",
-          url : `/api/projects/${this.props.projectId}/tasks/import`,
-          parallelUploads: 1,
-          maxFilesize: 2147483647,
-          uploadMultiple: false,
-          acceptedFiles: "application/zip,application/octet-stream,application/x-zip-compressed,multipart/x-zip",
-          autoProcessQueue: true,
-          createImageThumbnails: false,
-          previewTemplate: '<div style="display:none"></div>',
-          clickable: this.uploadButton,
-          timeout: 2147483647,
-          chunking: true,
-          chunkSize: 8000000, // 8MB,
-          retryChunks: true,
-          retryChunksLimit: 20,
-          headers: {
-            [csrf.header]: csrf.token
-          }
+  componentWillUnmount() {
+    Object.values(this.dzInstances).forEach(dz => dz.destroy());
+  }
+
+  initDropzone = (asset) => {
+    const element = this.dropzones[asset.key];
+    if (!element) return;
+
+    const dz = new Dropzone(element, {
+      paramName: asset.key,
+      url: `/api/projects/${this.props.projectId}/tasks/import/external/upload`,
+      parallelUploads: 1,
+      maxFilesize: 2147483647,
+      uploadMultiple: false,
+      acceptedFiles: asset.mimeTypes + ',' + asset.accept,
+      autoProcessQueue: false,
+      createImageThumbnails: false,
+      previewTemplate: '<div style="display:none"></div>',
+      timeout: 2147483647,
+      chunking: true,
+      chunkSize: 8000000,
+      retryChunks: true,
+      retryChunksLimit: 10,
+      maxFiles: 1,
+      headers: {
+        [csrf.header]: csrf.token
+      }
+    });
+
+    dz.on("addedfile", (file) => {
+      if (dz.files.length > 1) {
+        dz.removeFile(dz.files[0]);
+      }
+      this.setState(prev => ({
+        files: { ...prev.files, [asset.key]: file.name }
+      }));
+    });
+
+    dz.on("removedfile", () => {
+      this.setState(prev => {
+        const files = { ...prev.files };
+        delete files[asset.key];
+        return { files };
       });
+    });
 
-      this.dz.on("error", (file) => {
-          if (this.state.uploading) this.setState({error: _("Cannot upload file. Check your internet connection and try again.")});
-        })
-        .on("sending", () => {
-          this.setState({typeUrl: false, uploading: true, totalCount: 1});
-        })
-        .on("reset", () => {
-          this.setState({uploading: false, progress: 0, totalBytes: 0, totalBytesSent: 0});
-        })
-        .on("uploadprogress", (file, progress, bytesSent) => {
-            if (progress == 100) return; // Workaround for chunked upload progress bar jumping around
-            this.setState({
-              progress,
-              totalBytes: file.size,
-              totalBytesSent: bytesSent
-            });
-        })
-        .on("sending", (file, xhr, formData) => {
-          // Safari does not have support for has on FormData
-          // as of December 2017
-          if (!formData.has || !formData.has("name")) formData.append("name", this.defaultTaskName());
-        })
-        .on("complete", (file) => {
-          if (file.status === "success"){
-            this.setState({uploading: false});
-            try{
-              let response = JSON.parse(file.xhr.response);
-              if (!response.id) throw new Error(`Expected id field, but none given (${response})`);
-              this.props.onImported();
-            }catch(e){
-              this.setState({error: interpolate(_('Invalid response from server: %(error)s'), { error: e.message})});
-            }
-          }else{
-            this.setState({uploading: false, error: _("An error occured while uploading the file. Please try again.")});
-          }
+    dz.on("sending", (file, xhr, formData) => {
+      formData.append("uuid", this.uploadSessionId);
+    });
+
+    dz.on("uploadprogress", (file, progress, bytesSent) => {
+      if (progress === 100) return;
+      this.fileProgress[asset.key] = { sent: bytesSent, total: file.size };
+      this.updateTotalProgress();
+    });
+
+    dz.on("error", (file, errorMessage) => {
+      file._retryCount = (file._retryCount || 0) + 1;
+      if (file._retryCount < 10) {
+        setTimeout(() => {
+          file.status = Dropzone.QUEUED;
+          dz.processQueue();
+        }, 2000 * file._retryCount);
+      } else {
+        this.setState({ 
+          error: _("Upload failed after multiple retries. Please check your connection and try again."),
+          uploading: false 
         });
-    }
-  }
+        this.cancelUpload();
+      }
+    });
 
-  cancel = (e) => {
+    dz.on("success", (file) => {
+      this.fileProgress[asset.key] = { sent: file.size, total: file.size };
+      this.updateTotalProgress();
+      this.checkAllUploadsComplete();
+    });
+
+    this.dzInstances[asset.key] = dz;
+  };
+
+  updateTotalProgress = () => {
+    let totalBytes = 0;
+    let totalBytesSent = 0;
+    Object.values(this.fileProgress).forEach(p => {
+      totalBytes += p.total;
+      totalBytesSent += p.sent;
+    });
+    const progress = totalBytes > 0 ? (totalBytesSent / totalBytes) * 100 : 0;
+    this.setState({ progress, totalBytes, totalBytesSent });
+  };
+
+  checkAllUploadsComplete = () => {
+    const activeKeys = Object.keys(this.state.files);
+    const allComplete = activeKeys.every(key => {
+      const dz = this.dzInstances[key];
+      return dz.files.length > 0 && dz.files[0].status === Dropzone.SUCCESS;
+    });
+    if (allComplete) {
+      this.commitUpload();
+    }
+  };
+
+  initSession = () => {
+    return $.ajax({
+      url: `/api/projects/${this.props.projectId}/tasks/import/external/init`,
+      type: 'POST',
+      contentType: 'application/json',
+      headers: {
+        [csrf.header]: csrf.token
+      }
+    }).then(data => data.uuid);
+  };
+
+  commitUpload = (retryCount) => {
+    retryCount = retryCount || 0;
+    
+    $.ajax({
+      url: `/api/projects/${this.props.projectId}/tasks/import/external/commit`,
+      type: 'POST',
+      contentType: 'application/json',
+      headers: {
+        [csrf.header]: csrf.token
+      },
+      data: JSON.stringify({ uuid: this.uploadSessionId })
+    }).done(() => {
+      this.setState({ uploading: false, progress: 100 });
+      this.props.onImported();
+    }).fail(() => {
+      if (retryCount < 10) {
+        setTimeout(() => {
+          this.commitUpload(retryCount + 1);
+        }, 2000 * (retryCount + 1));
+      } else {
+        this.setState({ 
+          error: _("Failed to finalize upload. Please try again."), 
+          uploading: false 
+        });
+      }
+    });
+  };
+
+  startUpload = () => {
+    const activeKeys = Object.keys(this.state.files);
+    if (activeKeys.length === 0) {
+      this.setState({ error: _("Please select at least one file to upload.") });
+      return;
+    }
+
+    this.setState({ error: "", uploading: true, progress: 0 });
+    this.fileProgress = {};
+
+    activeKeys.forEach(key => {
+      const dz = this.dzInstances[key];
+      if (dz.files.length > 0) {
+        this.fileProgress[key] = { sent: 0, total: dz.files[0].size };
+      }
+    });
+    this.updateTotalProgress();
+
+    this.initSession()
+      .done(uuid => {
+        this.uploadSessionId = uuid;
+        activeKeys.forEach(key => {
+          this.dzInstances[key].processQueue();
+        });
+      })
+      .fail(() => {
+        this.setState({ 
+          error: _("Failed to initialize upload session"), 
+          uploading: false 
+        });
+      });
+  };
+
+  cancel = () => {
     this.cancelUpload();
-    this.props.onCancel();
-  }
+    if (this.props.onCancel) this.props.onCancel();
+  };
 
-  cancelUpload = (e) => {
-    this.setState({uploading: false});
-    setTimeout(() => {
-      this.dz.removeAllFiles(true);
-    }, 0);
-  }
+  cancelUpload = () => {
+    this.setState({ uploading: false, progress: 0 });
+    Object.values(this.dzInstances).forEach(dz => dz.removeAllFiles(true));
+    this.fileProgress = {};
+    this.uploadSessionId = null;
+  };
 
-  setRef = (prop) => {
-    return (domNode) => {
-      if (domNode != null) this[prop] = domNode;
-    }
-  }
+  setDropzoneRef = (key) => (node) => {
+    if (node) this.dropzones[key] = node;
+  };
+
+  removeFile = (key) => {
+    const dz = this.dzInstances[key];
+    if (dz) dz.removeAllFiles(true);
+  };
 
   render() {
+    const { uploading, files } = this.state;
+    const hasFiles = Object.keys(files).length > 0;
+
     return (
-      <div ref={this.setRef("dropzone")} className="import-external-panel theme-background-highlight">
+      <div className="import-external-panel theme-background-highlight">
         <div className="form-horizontal">
           <ErrorMessage bind={[this, 'error']} />
-
-          <button type="button" className="close theme-color-primary" title="Close" onClick={this.cancel}><span aria-hidden="true">&times;</span></button>
-          <h4>{_("Import External Data")}</h4>
-          
-          <button disabled={this.state.uploading}
-                  type="button" 
-                  className="btn btn-primary"
-                  ref={this.setRef("uploadButton")}>
-            <i className="glyphicon glyphicon-upload"></i>
-            {_("Upload")}
+          <button type="button" className="close theme-color-primary" title={_("Close")} onClick={this.cancel}>
+            <span aria-hidden="true">&times;</span>
           </button>
+          <h4><i className="fa fa-cloud-upload-alt"></i> {_("Import External Data")}</h4>
+          <p>{_("Select files. At least one file is required.")}</p>
 
-          {this.state.uploading ? <div>
-            <UploadProgressBar {...this.state}/>
-            <button type="button"
-                    className="btn btn-danger btn-sm" 
-                    onClick={this.cancelUpload}>
-              <i className="glyphicon glyphicon-remove-circle"></i>
-              {_("Cancel Upload")}
-            </button> 
-          </div> : ""}
+          <div className="asset-dropzones">
+            {ASSET_TYPES.map(asset => (
+              <div key={asset.key} className="asset-dropzone-wrapper">
+                <div
+                  ref={this.setDropzoneRef(asset.key)}
+                  className={`theme-border-highlight-9 theme-border-highlight-7-hover theme-background-highlight theme-background-hightlight-hover asset-dropzone ${files[asset.key] ? 'has-file' : ''} ${uploading ? 'disabled' : ''}`}
+                >
+                  <i className={`${asset.icon} asset-icon`}></i>
+                  <div className="asset-label">{asset.label}</div>
+                  <div className="asset-accept">{asset.accept}</div>
+                  {files[asset.key] && (
+                    <div className="asset-filename">
+                      <i className="fa fa-check-circle text-success"></i> {files[asset.key]}
+                      {!uploading && (
+                        <button
+                          type="button"
+                          className="btn-remove-file"
+                          onClick={(e) => { e.stopPropagation(); this.removeFile(asset.key); }}
+                          title={_("Remove")}
+                        >
+                          <i className="fa fa-times"></i>
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {uploading ? (
+            <div className="upload-progress-section">
+              <UploadProgressBar {...this.state} />
+              <button type="button" className="btn btn-danger btn-sm" onClick={this.cancelUpload}>
+                <i className="fa fa-times-circle"></i> {_("Cancel Upload")}
+              </button>
+            </div>
+          ) : (
+            <button
+              disabled={!hasFiles}
+              type="button"
+              className="btn btn-primary"
+              onClick={this.startUpload}
+            >
+              <i className="fa fa-upload"></i> {_("Upload")}
+            </button>
+          )}
         </div>
       </div>
     );
