@@ -37,7 +37,7 @@ class ImportExternalPanel extends React.Component {
     };
     this.dropzones = {};
     this.dzInstances = {};
-    this.uploadSessionId = null;
+    this.uploadUuid = null;
     this.fileProgress = {};
   }
 
@@ -58,7 +58,7 @@ class ImportExternalPanel extends React.Component {
       paramName: asset.key,
       url: `/api/projects/${this.props.projectId}/tasks/import/external/upload`,
       parallelUploads: 1,
-      maxFilesize: 2147483647,
+      maxFilesize: 131072, // 128GB
       uploadMultiple: false,
       acceptedFiles: asset.mimeTypes + ',' + asset.accept,
       autoProcessQueue: false,
@@ -93,7 +93,7 @@ class ImportExternalPanel extends React.Component {
     });
 
     dz.on("sending", (file, xhr, formData) => {
-      formData.append("uuid", this.uploadSessionId);
+      formData.append("uuid", this.uploadUuid);
     });
 
     dz.on("uploadprogress", (file, progress, bytesSent) => {
@@ -149,15 +149,20 @@ class ImportExternalPanel extends React.Component {
     }
   };
 
-  initSession = () => {
+  defaultTaskName = () => {
+    return `Task of ${new Date().toISOString()}`;
+  }
+
+  initTask = () => {
     return $.ajax({
       url: `/api/projects/${this.props.projectId}/tasks/import/external/init`,
+      data: JSON.stringify({ name: this.defaultTaskName()  }),
       type: 'POST',
       contentType: 'application/json',
       headers: {
-        [csrf.header]: csrf.token
-      }
-    }).then(data => data.uuid);
+      [csrf.header]: csrf.token
+      },
+    }).then(json => json.uuid);
   };
 
   commitUpload = (retryCount) => {
@@ -170,7 +175,7 @@ class ImportExternalPanel extends React.Component {
       headers: {
         [csrf.header]: csrf.token
       },
-      data: JSON.stringify({ uuid: this.uploadSessionId })
+      data: JSON.stringify({ uuid: this.uploadUuid })
     }).done(() => {
       this.setState({ uploading: false, progress: 100 });
       this.props.onImported();
@@ -181,7 +186,7 @@ class ImportExternalPanel extends React.Component {
         }, 2000 * (retryCount + 1));
       } else {
         this.setState({ 
-          error: _("Failed to finalize upload. Please try again."), 
+          error: _("Failed to complete upload. Try again later."), 
           uploading: false 
         });
       }
@@ -206,16 +211,16 @@ class ImportExternalPanel extends React.Component {
     });
     this.updateTotalProgress();
 
-    this.initSession()
+    this.initTask()
       .done(uuid => {
-        this.uploadSessionId = uuid;
+        this.uploadUuid = uuid;
         activeKeys.forEach(key => {
           this.dzInstances[key].processQueue();
         });
       })
       .fail(() => {
         this.setState({ 
-          error: _("Failed to initialize upload session"), 
+          error: _("Failed to initialize upload. Try again later."), 
           uploading: false 
         });
       });
@@ -230,7 +235,7 @@ class ImportExternalPanel extends React.Component {
     this.setState({ uploading: false, progress: 0 });
     Object.values(this.dzInstances).forEach(dz => dz.removeAllFiles(true));
     this.fileProgress = {};
-    this.uploadSessionId = null;
+    this.uploadUuid = null;
   };
 
   setDropzoneRef = (key) => (node) => {
@@ -244,7 +249,8 @@ class ImportExternalPanel extends React.Component {
 
   render() {
     const { uploading, files } = this.state;
-    const hasFiles = Object.keys(files).length > 0;
+    const filesCount = Object.keys(files).length;
+    const hasFiles = filesCount > 0;
 
     return (
       <div className="import-external-panel theme-background-highlight">
@@ -265,10 +271,10 @@ class ImportExternalPanel extends React.Component {
                 >
                   <i className={`${asset.icon} asset-icon`}></i>
                   <div className="asset-label">{asset.label}</div>
-                  <div className="asset-accept">{asset.accept}</div>
+                  {!files[asset.key] && <div className="asset-accept">{asset.accept}</div>}
                   {files[asset.key] && (
                     <div className="asset-filename">
-                      <i className="fa fa-check-circle text-success"></i> {files[asset.key]}
+                      <i className="fa fa-check-circle"></i> {files[asset.key]}
                       {!uploading && (
                         <button
                           type="button"
@@ -288,7 +294,7 @@ class ImportExternalPanel extends React.Component {
 
           {uploading ? (
             <div className="upload-progress-section">
-              <UploadProgressBar {...this.state} />
+              <UploadProgressBar totalCount={filesCount} {...this.state} />
               <button type="button" className="btn btn-danger btn-sm" onClick={this.cancelUpload}>
                 <i className="fa fa-times-circle"></i> {_("Cancel Upload")}
               </button>

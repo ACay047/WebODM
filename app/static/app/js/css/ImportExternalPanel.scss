@@ -60,13 +60,12 @@
     }
 
     .asset-accept {
-      font-size: 11px;
+      font-size: 12px;
       color: #999;
     }
 
     .asset-filename {
-      font-size: 11px;
-      color: #5cb85c;
+      font-size: 12px;
       margin-top: 8px;
       word-break: break-all;
       max-width: 100%;
@@ -78,15 +77,10 @@
       .btn-remove-file {
         background: none;
         border: none;
-        color: #d9534f;
         cursor: pointer;
         padding: 2px 6px;
         margin-left: 4px;
         font-size: 12px;
-
-        &:hover {
-          color: #c9302c;
-        }
       }
     }
   }

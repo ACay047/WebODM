@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import uuid as uuidmod
 from wsgiref.util import FileWrapper
 
 import mimetypes
@@ -745,7 +746,7 @@ class TaskAssetsImport(APIView):
                                             status=status_codes.RUNNING,
                                             pending_action=pending_actions.IMPORT)
             task.create_task_directories()
-            destination_file = task.assets_path("all.zip")
+            asset_file = task.assets_path("all.zip")
 
             # Non-chunked file import
             if tmp_upload_file is None and len(files) > 0:
@@ -764,6 +765,136 @@ class TaskAssetsImport(APIView):
 
         serializer = TaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+
+"""
+Task external import functions
+"""
+
+class TaskExternalImportInit(APIView):
+    permission_classes = (permissions.AllowAny,)
+    parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
+
+    def post(self, request, project_pk=None):
+        project = get_and_check_project(request, project_pk, ('change_project',))
+
+        uuid = str(uuidmod.uuid4())
+        tmp_upload_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{uuid}")
+        os.makedirs(tmp_upload_dir, exist_ok=True)
+
+        return Response({"uuid": uuid})
+
+
+class TaskExternalImportUpload(APIView):
+    permission_classes = (permissions.AllowAny,)
+    parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
+
+    def post(self, request, project_pk=None):
+        project = get_and_check_project(request, project_pk, ('change_project',))
+        files = flatten_files(request.FILES)
+        import_uuid = request.data.get('uuid', None)
+        tmp_upload_dir = None
+
+        try:
+            uuidmod.UUID(import_uuid, version=4)
+            tmp_upload_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{import_uuid}")
+            if not os.path.isdir(tmp_upload_dir):
+                raise ValueError("Invalid uuid")
+        except (TypeError, ValueError, AttributeError):
+            raise exceptions.ValidationError(detail=_("Invalid uuid"))
+
+        if len(files) != 1:
+            raise exceptions.ValidationError(detail=_("Cannot create task, you need to upload 1 file"))
+
+        file_type = [k for k in request.FILES][0]
+        # file_ext = os.path.splitext(files[0].name)[1]
+
+        if file_type == "orthophoto":
+            asset_file = "orthophoto.tif"
+        elif file_type == "dsm":
+            asset_file = "dsm.tif"
+        elif file_type == "dtm":
+            asset_file = "dtm.tif"
+        elif file_type == "pointcloud":
+            asset_file = "georeferenced_model.laz"
+        elif file_type == "texturedmodel":
+            asset_file = "textured_model.glb"
+        else:
+            raise exceptions.ValidationError(detail=_("Invalid file type"))
+
+        chunk_index = request.data.get('dzchunkindex')
+        uuid = request.data.get('dzuuid') 
+        total_chunk_count = request.data.get('dztotalchunkcount', None)
+
+        # Chunked upload?
+        tmp_upload_file = None
+        if len(files) > 0 and chunk_index is not None and uuid is not None and total_chunk_count is not None:
+            byte_offset = request.data.get('dzchunkbyteoffset', 0) 
+
+            try:
+                chunk_index = int(chunk_index)
+                byte_offset = int(byte_offset)
+                total_chunk_count = int(total_chunk_count)
+            except ValueError:
+                raise exceptions.ValidationError(detail="Some parameters are not integers")
+            uuid = re.sub('[^0-9a-zA-Z-]+', "", uuid)
+
+            tmp_upload_file = os.path.join(tmp_upload_dir, f"{uuid}.upload")
+            if os.path.isfile(tmp_upload_file) and chunk_index == 0:
+                os.unlink(tmp_upload_file)
+            
+            with open(tmp_upload_file, 'ab') as fd:
+                fd.truncate(byte_offset)
+                fd.seek(byte_offset)
+                if isinstance(files[0], InMemoryUploadedFile):
+                    for chunk in files[0].chunks():
+                        fd.write(chunk)
+                else:
+                    with open(files[0].temporary_file_path(), 'rb') as f:
+                        shutil.copyfileobj(f, fd)
+            
+            if chunk_index + 1 < total_chunk_count:
+                return Response({'uploaded': True}, status=status.HTTP_200_OK)
+
+        # Ready to move to assets
+        destination_file = os.path.join(tmp_upload_dir, asset_file)
+
+        # Non-chunked file import
+        if tmp_upload_file is None and len(files) > 0:
+            with open(destination_file, 'wb+') as fd:
+                if isinstance(files[0], InMemoryUploadedFile):
+                    for chunk in files[0].chunks():
+                        fd.write(chunk)
+                else:
+                    with open(files[0].temporary_file_path(), 'rb') as file:
+                        copyfileobj(file, fd)
+        elif tmp_upload_file is not None:
+            # Move
+            shutil.move(tmp_upload_file, destination_file)
+
+        return Response({'uploaded': True, 'done': True, 'asset': asset_file}, status=status.HTTP_200_OK)
+
+class TaskExternalImportCommit(APIView):
+    permission_classes = (permissions.AllowAny,)
+    parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
+
+    def post(self, request, project_pk=None):
+        project = get_and_check_project(request, project_pk, ('change_project',))
+
+        task_name = request.data.get('name', _('Imported Task'))
+
+        task = models.Task.objects.create(project=project,
+                                        auto_processing_node=False,
+                                        name=task_name,
+                                        import_url="file://external",
+                                        status=status_codes.RUNNING,
+                                        partial=True)
+        task.create_task_directories()
+
+        serializer = TaskSerializer(task)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 
 """
