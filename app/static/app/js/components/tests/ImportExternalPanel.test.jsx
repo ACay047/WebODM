@@ -1,6 +1,6 @@
 import React from 'react';
 import { shallow } from 'enzyme';
-import ImportTaskPanel from '../ImportExternalPanel';
+import ImportExternalPanel from '../ImportExternalPanel';
 
 describe('<ImportExternalPanel />', () => {
   it('renders without exploding', () => {
