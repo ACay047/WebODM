@@ -4,6 +4,7 @@ import update from 'immutability-helper';
 import TaskList from './TaskList';
 import NewTaskPanel from './NewTaskPanel';
 import ImportTaskPanel from './ImportTaskPanel';
+import ImportExternalPanel from './ImportExternalPanel';
 import UploadProgressBar from './UploadProgressBar';
 import ErrorMessage from './ErrorMessage';
 import EditProjectDialog from './EditProjectDialog';
@@ -39,6 +40,7 @@ class ProjectListItem extends React.Component {
       data: props.data,
       refreshing: false,
       importing: false,
+      importingExternal: false,
       buttons: [],
       importItems: [],
       sortKey: "-created_at",
@@ -376,7 +378,7 @@ class ProjectListItem extends React.Component {
   }
 
   newTaskAdded = () => {
-    this.setState({importing: false});
+    this.setState({importing: false, importingExternal: false});
     
     if (this.state.showTaskList){
       this.taskList.refresh();
@@ -537,12 +539,21 @@ class ProjectListItem extends React.Component {
   }
 
   handleImportTask = () => {
-    this.setState({importing: true});
+    this.setState({importing: true, importingExternal: false});
   }
 
   handleCancelImportTask = () => {
     this.setState({importing: false});
   }
+
+  handleImportExternal = () => {
+    this.setState({importingExternal: true, importing: false});
+  }
+
+  handleCancelImportExternal = () => {
+    this.setState({importingExternal: false});
+  }
+  
 
   handleTaskTitleHint = (hasGPSCallback) => {
       return new Promise((resolve, reject) => {
@@ -710,7 +721,7 @@ class ProjectListItem extends React.Component {
                 </button>
                 <ul className="dropdown-menu import-dropdown">
                   <li><a href="javascript:void(0)" onClick={this.handleImportTask}><i className={"far fa-file-archive fa-fw"}></i> {_("Assets / Backups")}</a></li>
-                  <li><a href="javascript:void(0)" onClick={this.handleImportTask}><i className={"fas fa-database fa-fw"}></i> {_("External Data")}</a></li>
+                  <li><a href="javascript:void(0)" onClick={this.handleImportExternal}><i className={"fas fa-database fa-fw"}></i> {_("External Data")}</a></li>
                   {this.state.importItems.length ? 
                     this.state.importItems.map((item, i) => <React.Fragment key={i}>{item}</React.Fragment>)
                   : ""}
@@ -836,6 +847,14 @@ class ProjectListItem extends React.Component {
             <ImportTaskPanel
               onImported={this.newTaskAdded}
               onCancel={this.handleCancelImportTask}
+              projectId={this.state.data.id}
+            />
+          : ""}
+
+          {this.state.importingExternal ? 
+            <ImportExternalPanel
+              onImported={this.newTaskAdded}
+              onCancel={this.handleCancelImportExternal}
               projectId={this.state.data.id}
             />
           : ""}
