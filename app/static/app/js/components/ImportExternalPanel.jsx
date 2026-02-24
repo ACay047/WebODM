@@ -156,7 +156,6 @@ class ImportExternalPanel extends React.Component {
   initTask = () => {
     return $.ajax({
       url: `/api/projects/${this.props.projectId}/tasks/import/external/init`,
-      data: JSON.stringify({ name: this.defaultTaskName()  }),
       type: 'POST',
       contentType: 'application/json',
       headers: {
@@ -170,12 +169,15 @@ class ImportExternalPanel extends React.Component {
     
     $.ajax({
       url: `/api/projects/${this.props.projectId}/tasks/import/external/commit`,
+      data: JSON.stringify({ 
+        uuid: this.uploadUuid,
+        name: this.defaultTaskName()
+      }),
       type: 'POST',
       contentType: 'application/json',
       headers: {
         [csrf.header]: csrf.token
-      },
-      data: JSON.stringify({ uuid: this.uploadUuid })
+      }
     }).done(() => {
       this.setState({ uploading: false, progress: 100 });
       this.props.onImported();

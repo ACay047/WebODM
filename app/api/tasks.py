@@ -786,6 +786,26 @@ class TaskExternalImportInit(APIView):
         return Response({"uuid": uuid})
 
 
+EXTERNAL_ASSET_FILES = {
+    'orthophoto': 'orthophoto.tif',
+    'dsm': 'dsm.tif',
+    'dtm': 'dtm.tif',
+    'pointcloud': 'georeferenced_model.laz',
+    'texturedmodel': 'textured_model.glb',
+}
+
+def get_external_import_tmpdir(request):
+    uuid = request.data.get('uuid', None)
+    try:
+        uuidmod.UUID(uuid, version=4)
+        tmp_upload_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{uuid}")
+        if not os.path.isdir(tmp_upload_dir):
+            raise ValueError("Invalid uuid")
+        return tmp_upload_dir
+    except (TypeError, ValueError, AttributeError):
+        raise exceptions.ValidationError(detail=_("Invalid uuid"))
+
+
 class TaskExternalImportUpload(APIView):
     permission_classes = (permissions.AllowAny,)
     parser_classes = (parsers.MultiPartParser, parsers.JSONParser, parsers.FormParser,)
@@ -793,16 +813,7 @@ class TaskExternalImportUpload(APIView):
     def post(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project',))
         files = flatten_files(request.FILES)
-        import_uuid = request.data.get('uuid', None)
-        tmp_upload_dir = None
-
-        try:
-            uuidmod.UUID(import_uuid, version=4)
-            tmp_upload_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{import_uuid}")
-            if not os.path.isdir(tmp_upload_dir):
-                raise ValueError("Invalid uuid")
-        except (TypeError, ValueError, AttributeError):
-            raise exceptions.ValidationError(detail=_("Invalid uuid"))
+        tmp_upload_dir = get_external_import_tmpdir(request)
 
         if len(files) != 1:
             raise exceptions.ValidationError(detail=_("Cannot create task, you need to upload 1 file"))
@@ -810,17 +821,8 @@ class TaskExternalImportUpload(APIView):
         file_type = [k for k in request.FILES][0]
         # file_ext = os.path.splitext(files[0].name)[1]
 
-        if file_type == "orthophoto":
-            asset_file = "orthophoto.tif"
-        elif file_type == "dsm":
-            asset_file = "dsm.tif"
-        elif file_type == "dtm":
-            asset_file = "dtm.tif"
-        elif file_type == "pointcloud":
-            asset_file = "georeferenced_model.laz"
-        elif file_type == "texturedmodel":
-            asset_file = "textured_model.glb"
-        else:
+        asset_file = EXTERNAL_ASSET_FILES.get(file_type) 
+        if asset_file is None:
             raise exceptions.ValidationError(detail=_("Invalid file type"))
 
         chunk_index = request.data.get('dzchunkindex')
@@ -881,20 +883,29 @@ class TaskExternalImportCommit(APIView):
 
     def post(self, request, project_pk=None):
         project = get_and_check_project(request, project_pk, ('change_project',))
-
+        
+        tmp_upload_dir = get_external_import_tmpdir(request)
         task_name = request.data.get('name', _('Imported Task'))
+        
+        with transaction.atomic():
+            task = models.Task.objects.create(project=project,
+                                            auto_processing_node=False,
+                                            name=task_name,
+                                            import_url="file://external",
+                                            status=status_codes.RUNNING,
+                                            pending_action=pending_actions.IMPORT)
+            task.create_task_directories()
 
-        task = models.Task.objects.create(project=project,
-                                        auto_processing_node=False,
-                                        name=task_name,
-                                        import_url="file://external",
-                                        status=status_codes.RUNNING,
-                                        partial=True)
-        task.create_task_directories()
+            for asset in EXTERNAL_ASSET_FILES.values():
+                src_path = os.path.join(tmp_upload_dir, asset)
+                if os.path.isfile(src_path):
+                    dst_path = task.get_asset_download_path(asset)
+                    dst_dir = os.path.dirname(dst_path)
+                    os.makedirs(dst_dir, exist_ok=True)
+                    shutil.move(src_path, dst_path)
 
         serializer = TaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
 
 
 """
