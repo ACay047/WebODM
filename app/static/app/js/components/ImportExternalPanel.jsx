@@ -291,7 +291,7 @@ class ImportExternalPanel extends React.Component {
               <div key={asset.key} className="asset-dropzone-wrapper">
                 <div
                   ref={this.setDropzoneRef(asset.key)}
-                  className={`theme-border-highlight-9 theme-border-highlight-7-hover theme-background-highlight theme-background-hightlight-hover asset-dropzone ${files[asset.key] ? 'has-file' : ''} ${uploading ? 'disabled' : ''}`}
+                  className={`theme-border-highlight-9 theme-border-highlight-7-hover theme-background-highlight theme-background-highlight-hover asset-dropzone ${files[asset.key] ? 'has-file' : ''} ${uploading ? 'disabled' : ''}`}
                 >
                   <i className={`${asset.icon} asset-icon`}></i>
                   <div className="asset-label">{asset.label}</div>

@@ -274,7 +274,7 @@ pre.prettyprint:focus,
 	border-color: {% scalebyiv theme_highlight 0.7 %};
 }
 
-.theme-background-hightlight-hover:hover{
+.theme-background-highlight-hover:hover{
 	background-color: {% scalebyiv theme_highlight 0.98 %};
 }
 
