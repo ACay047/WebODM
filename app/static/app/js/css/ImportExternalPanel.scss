@@ -20,6 +20,9 @@
   }
 
   .asset-dropzone {
+    .asset-icon, .asset-label, .asset-accept{
+      pointer-events: none;
+    }
     border-width: 2px;
     border-style: dashed;
     border-radius: 8px;

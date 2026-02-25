@@ -12,8 +12,8 @@ const ASSET_TYPES = [
   { key: 'orthophoto', label: _('Orthophoto'), icon: 'fa fa-map', accept: '.tif', mimeTypes: 'image/tiff' },
   { key: 'dsm', label: _('Surface Model'), icon: 'fa fa-chart-area', accept: '.tif', mimeTypes: 'image/tiff' },
   { key: 'dtm', label: _('Terrain Model'), icon: 'fa fa-chart-area', accept: '.tif', mimeTypes: 'image/tiff' },
-  { key: 'pointcloud', label: _('Point Cloud'), icon: 'fa fa-braille', accept: '.laz', mimeTypes: '.laz' },
-  { key: 'texturedmodel', label: _('Textured Model'), icon: 'fab fa-connectdevelop', accept: '.glb', mimeTypes: '.glb' }
+  { key: 'pointcloud', label: _('Point Cloud'), icon: 'fa fa-braille', accept: '.laz,.las', mimeTypes: 'application/vnd.laszip,application/vnd.las' },
+  { key: 'texturedmodel', label: _('Textured Model'), icon: 'fab fa-connectdevelop', accept: '.glb', mimeTypes: 'gltf-binary' }
 ];
 
 class ImportExternalPanel extends React.Component {
@@ -139,8 +139,8 @@ class ImportExternalPanel extends React.Component {
   };
 
   checkAllUploadsComplete = () => {
-    const activeKeys = Object.keys(this.state.files);
-    const allComplete = activeKeys.every(key => {
+    const assetTypes = Object.keys(this.state.files);
+    const allComplete = assetTypes.every(key => {
       const dz = this.dzInstances[key];
       return dz.files.length > 0 && dz.files[0].status === Dropzone.SUCCESS;
     });
@@ -181,7 +181,22 @@ class ImportExternalPanel extends React.Component {
     }).done(() => {
       this.setState({ uploading: false, progress: 100 });
       this.props.onImported();
-    }).fail(() => {
+    }).fail((xhr) => {
+      if (xhr.status === 400) {
+        try {
+          const errors = JSON.parse(xhr.responseText);
+          if (Array.isArray(errors) && errors.length > 0) {
+            this.setState({ 
+              error: errors.join(", "), 
+              uploading: false 
+            });
+            return;
+          }
+        } catch (e) {
+          // Not valid JSON, continue with retry logic
+        }
+      }
+      
       if (retryCount < 10) {
         setTimeout(() => {
           this.commitUpload(retryCount + 1);
@@ -196,16 +211,23 @@ class ImportExternalPanel extends React.Component {
   };
 
   startUpload = () => {
-    const activeKeys = Object.keys(this.state.files);
-    if (activeKeys.length === 0) {
-      this.setState({ error: _("Please select at least one file to upload.") });
+    const assetTypes = Object.keys(this.state.files);
+    if (assetTypes.length === 0) {
+      this.setState({error: _("Select at least one file to upload.") });
+      return;
+    }
+
+    // Don't allow a GLB to be uploaded alone
+    // Always require a point cloud also
+    if (assetTypes.indexOf("texturedmodel") !== -1 && assetTypes.indexOf("pointcloud") === -1){
+      this.setState({error: _("A textured model requires also a point cloud to be properly displayed.") });
       return;
     }
 
     this.setState({ error: "", uploading: true, progress: 0 });
     this.fileProgress = {};
 
-    activeKeys.forEach(key => {
+    assetTypes.forEach(key => {
       const dz = this.dzInstances[key];
       if (dz.files.length > 0) {
         this.fileProgress[key] = { sent: 0, total: dz.files[0].size };
@@ -216,7 +238,7 @@ class ImportExternalPanel extends React.Component {
     this.initTask()
       .done(uuid => {
         this.uploadUuid = uuid;
-        activeKeys.forEach(key => {
+        assetTypes.forEach(key => {
           this.dzInstances[key].processQueue();
         });
       })

@@ -787,11 +787,11 @@ class TaskExternalImportInit(APIView):
 
 
 EXTERNAL_ASSET_FILES = {
-    'orthophoto': 'orthophoto.tif',
-    'dsm': 'dsm.tif',
-    'dtm': 'dtm.tif',
-    'pointcloud': 'georeferenced_model.laz',
-    'texturedmodel': 'textured_model.glb',
+    'orthophoto': ['orthophoto.tif'],
+    'dsm': ['dsm.tif'],
+    'dtm': ['dtm.tif'],
+    'pointcloud': ['georeferenced_model.laz', 'georeferenced_model.las'],
+    'texturedmodel': ['textured_model.glb'],
 }
 
 def get_external_import_tmpdir(request):
@@ -819,9 +819,16 @@ class TaskExternalImportUpload(APIView):
             raise exceptions.ValidationError(detail=_("Cannot create task, you need to upload 1 file"))
 
         file_type = [k for k in request.FILES][0]
-        # file_ext = os.path.splitext(files[0].name)[1]
+        file_ext = os.path.splitext(files[0].name)[1]
+        
+        asset_file = None
+        asset_file_candidates = EXTERNAL_ASSET_FILES.get(file_type)
 
-        asset_file = EXTERNAL_ASSET_FILES.get(file_type) 
+        for f in asset_file_candidates:
+            if os.path.splitext(f)[1] == file_ext:
+                asset_file = f
+                break
+
         if asset_file is None:
             raise exceptions.ValidationError(detail=_("Invalid file type"))
 
@@ -839,7 +846,7 @@ class TaskExternalImportUpload(APIView):
                 byte_offset = int(byte_offset)
                 total_chunk_count = int(total_chunk_count)
             except ValueError:
-                raise exceptions.ValidationError(detail="Some parameters are not integers")
+                raise exceptions.ValidationError(detail=_("Some parameters are not integers"))
             uuid = re.sub('[^0-9a-zA-Z-]+', "", uuid)
 
             tmp_upload_file = os.path.join(tmp_upload_dir, f"{uuid}.upload")
@@ -886,7 +893,37 @@ class TaskExternalImportCommit(APIView):
         
         tmp_upload_dir = get_external_import_tmpdir(request)
         task_name = request.data.get('name', _('Imported Task'))
-        
+
+        # Quick assets validation (this should be fast)
+        for asset_type in EXTERNAL_ASSET_FILES:
+            asset_file_candidates = EXTERNAL_ASSET_FILES[asset_type]
+            for asset_file in asset_file_candidates:
+                src_path = os.path.join(tmp_upload_dir, asset_file)
+                if os.path.isfile(src_path):
+                    if asset_type == "orthophoto":
+                        with rasterio.open(src_path, "r") as f:
+                            if f.crs is None:
+                                raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
+                    
+                    if asset_type in ["dsm", "dtm"]:
+                        with rasterio.open(src_path, "r") as f:
+                            if f.crs is None:
+                                raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
+                            if f.count > 2:
+                                raise exceptions.ValidationError(detail=_("Elevation model must have 1 band"))
+
+                    if asset_type == "pointcloud":
+                        with open(src_path, "rb") as f:
+                            magic = f.read(4)
+                            if magic != b"LASF":
+                                raise exceptions.ValidationError(detail=_("Point cloud must be a valid LAZ/LAS file"))
+
+                    if asset_type == "texturedmodel":
+                        with open(src_path, "rb") as f:
+                            magic = f.read(4)
+                            if magic != b"glTF":
+                                raise exceptions.ValidationError(detail=_("Textured model must be a valid GLB file"))
+
         with transaction.atomic():
             task = models.Task.objects.create(project=project,
                                             auto_processing_node=False,
@@ -896,13 +933,14 @@ class TaskExternalImportCommit(APIView):
                                             pending_action=pending_actions.IMPORT)
             task.create_task_directories()
 
-            for asset in EXTERNAL_ASSET_FILES.values():
-                src_path = os.path.join(tmp_upload_dir, asset)
-                if os.path.isfile(src_path):
-                    dst_path = task.get_asset_download_path(asset)
-                    dst_dir = os.path.dirname(dst_path)
-                    os.makedirs(dst_dir, exist_ok=True)
-                    shutil.move(src_path, dst_path)
+            for asset_candidates in EXTERNAL_ASSET_FILES.values():
+                for asset in asset_candidates:
+                    src_path = os.path.join(tmp_upload_dir, asset)
+                    if os.path.isfile(src_path):
+                        dst_path = task.get_asset_download_path(asset)
+                        dst_dir = os.path.dirname(dst_path)
+                        os.makedirs(dst_dir, exist_ok=True)
+                        shutil.move(src_path, dst_path)
 
         serializer = TaskSerializer(task)
         return Response(serializer.data, status=status.HTTP_201_CREATED)

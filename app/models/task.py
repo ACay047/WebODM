@@ -376,7 +376,7 @@ class Task(models.Model):
         elif self.dsm_extent is not None:
             return self.dsm_extent.extent
         elif self.dtm_extent is not None:
-            return self.dsm_extent.extent
+            return self.dtm_extent.extent
         else:
             return None
 
@@ -1105,9 +1105,10 @@ class Task(models.Model):
                 return file 
     
     def get_point_cloud(self):
-        f = os.path.realpath(self.assets_path(self.ASSETS_MAP["georeferenced_model.laz"]))
-        if os.path.isfile(f):
-            return f
+        for asset in ["georeferenced_model.laz", "georeferenced_model.las"]:
+            f = os.path.realpath(self.assets_path(self.ASSETS_MAP[asset]))
+            if os.path.isfile(f):
+                return f
 
     def get_tile_path(self, tile_type, z, x, y):
         return self.assets_path("{}_tiles".format(tile_type), z, x, "{}.png".format(y))
