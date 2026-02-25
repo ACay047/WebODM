@@ -823,6 +823,8 @@ class TaskExternalImportUpload(APIView):
         
         asset_file = None
         asset_file_candidates = EXTERNAL_ASSET_FILES.get(file_type)
+        if asset_file_candidates is None: 
+            raise exceptions.ValidationError(detail=_("Invalid file type"))
 
         for f in asset_file_candidates:
             if os.path.splitext(f)[1] == file_ext:
