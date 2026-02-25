@@ -801,6 +801,11 @@ def get_external_import_tmpdir(request):
         tmp_upload_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{uuid}")
         if not os.path.isdir(tmp_upload_dir):
             raise ValueError("Invalid uuid")
+        try:
+            # Just in case
+            path_traversal_check(tmp_upload_dir, settings.FILE_UPLOAD_TEMP_DIR)
+        except SuspiciousFileOperation:
+            raise exceptions.NotFound(_("Invalid uuid"))
         return tmp_upload_dir
     except (TypeError, ValueError, AttributeError):
         raise exceptions.ValidationError(detail=_("Invalid uuid"))
@@ -897,61 +902,67 @@ class TaskExternalImportCommit(APIView):
         task_name = request.data.get('name', _('Imported Task'))
 
         # Quick assets validation (this should be fast)
-        asset_count = 0
-        for asset_type in EXTERNAL_ASSET_FILES:
-            asset_file_candidates = EXTERNAL_ASSET_FILES[asset_type]
-            for asset_file in asset_file_candidates:
-                src_path = os.path.join(tmp_upload_dir, asset_file)
-                if os.path.isfile(src_path):
-                    if asset_type == "orthophoto":
-                        with rasterio.open(src_path, "r") as f:
-                            if f.crs is None:
-                                raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
-                    
-                    if asset_type in ["dsm", "dtm"]:
-                        with rasterio.open(src_path, "r") as f:
-                            if f.crs is None:
-                                raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
-                            if f.count > 2:
-                                raise exceptions.ValidationError(detail=_("Elevation model must have 1 band"))
-
-                    if asset_type == "pointcloud":
-                        with open(src_path, "rb") as f:
-                            magic = f.read(4)
-                            if magic != b"LASF":
-                                raise exceptions.ValidationError(detail=_("Point cloud must be a valid LAZ/LAS file"))
-
-                    if asset_type == "texturedmodel":
-                        with open(src_path, "rb") as f:
-                            magic = f.read(4)
-                            if magic != b"glTF":
-                                raise exceptions.ValidationError(detail=_("Textured model must be a valid GLB file"))
-                    asset_count += 1
-        
-        if asset_count == 0:
-            raise exceptions.ValidationError(detail=_("No assets uploaded"))
-        
-        with transaction.atomic():
-            task = models.Task.objects.create(project=project,
-                                            auto_processing_node=False,
-                                            name=task_name,
-                                            import_url="file://external",
-                                            status=status_codes.RUNNING,
-                                            pending_action=pending_actions.IMPORT)
-            task.create_task_directories()
-
-            for asset_candidates in EXTERNAL_ASSET_FILES.values():
-                for asset in asset_candidates:
-                    src_path = os.path.join(tmp_upload_dir, asset)
+        try:
+            asset_count = 0
+            for asset_type in EXTERNAL_ASSET_FILES:
+                asset_file_candidates = EXTERNAL_ASSET_FILES[asset_type]
+                for asset_file in asset_file_candidates:
+                    src_path = os.path.join(tmp_upload_dir, asset_file)
                     if os.path.isfile(src_path):
-                        dst_path = task.get_asset_download_path(asset)
-                        dst_dir = os.path.dirname(dst_path)
-                        os.makedirs(dst_dir, exist_ok=True)
-                        shutil.move(src_path, dst_path)
+                        if asset_type == "orthophoto":
+                            with rasterio.open(src_path, "r") as f:
+                                if f.crs is None:
+                                    raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
+                        
+                        if asset_type in ["dsm", "dtm"]:
+                            with rasterio.open(src_path, "r") as f:
+                                if f.crs is None:
+                                    raise exceptions.ValidationError(detail=_("GeoTIFF must have a valid CRS"))
+                                if f.count > 2:
+                                    raise exceptions.ValidationError(detail=_("Elevation model must have at most 2 band"))
 
-        serializer = TaskSerializer(task)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+                        if asset_type == "pointcloud":
+                            with open(src_path, "rb") as f:
+                                magic = f.read(4)
+                                if magic != b"LASF":
+                                    raise exceptions.ValidationError(detail=_("Point cloud must be a valid LAZ/LAS file"))
 
+                        if asset_type == "texturedmodel":
+                            with open(src_path, "rb") as f:
+                                magic = f.read(4)
+                                if magic != b"glTF":
+                                    raise exceptions.ValidationError(detail=_("Textured model must be a valid GLB file"))
+                        asset_count += 1
+            
+            if asset_count == 0:
+                raise exceptions.ValidationError(detail=_("No assets uploaded"))
+            
+            with transaction.atomic():
+                task = models.Task.objects.create(project=project,
+                                                auto_processing_node=False,
+                                                name=task_name,
+                                                import_url="file://external",
+                                                status=status_codes.RUNNING,
+                                                pending_action=pending_actions.IMPORT)
+                task.create_task_directories()
+
+                for asset_candidates in EXTERNAL_ASSET_FILES.values():
+                    for asset in asset_candidates:
+                        src_path = os.path.join(tmp_upload_dir, asset)
+                        if os.path.isfile(src_path):
+                            dst_path = task.get_asset_download_path(asset)
+                            dst_dir = os.path.dirname(dst_path)
+                            os.makedirs(dst_dir, exist_ok=True)
+                            shutil.move(src_path, dst_path)
+
+            serializer = TaskSerializer(task)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        finally:
+            if tmp_upload_dir and os.path.isdir(tmp_upload_dir):
+                try:
+                    shutil.rmtree(tmp_upload_dir)
+                except OSError:
+                    pass
 
 """
 Task safe textured model endpoint
