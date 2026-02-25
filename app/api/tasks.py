@@ -895,6 +895,7 @@ class TaskExternalImportCommit(APIView):
         task_name = request.data.get('name', _('Imported Task'))
 
         # Quick assets validation (this should be fast)
+        asset_count = 0
         for asset_type in EXTERNAL_ASSET_FILES:
             asset_file_candidates = EXTERNAL_ASSET_FILES[asset_type]
             for asset_file in asset_file_candidates:
@@ -923,7 +924,11 @@ class TaskExternalImportCommit(APIView):
                             magic = f.read(4)
                             if magic != b"glTF":
                                 raise exceptions.ValidationError(detail=_("Textured model must be a valid GLB file"))
-
+                    asset_count += 1
+        
+        if asset_count == 0:
+            raise exceptions.ValidationError(detail=_("No assets uploaded"))
+        
         with transaction.atomic():
             task = models.Task.objects.create(project=project,
                                             auto_processing_node=False,
