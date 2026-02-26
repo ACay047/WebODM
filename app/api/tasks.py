@@ -832,7 +832,7 @@ class TaskExternalImportUpload(APIView):
             raise exceptions.ValidationError(detail=_("Invalid file type"))
 
         for f in asset_file_candidates:
-            if os.path.splitext(f)[1] == file_ext:
+            if os.path.splitext(f)[1].lower() == file_ext.lower():
                 asset_file = f
                 break
 
