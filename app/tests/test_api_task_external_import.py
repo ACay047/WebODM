@@ -1,15 +1,10 @@
 import os
-import time
 import shutil
-import struct
-import tempfile
 
-import numpy as np
-from PIL import Image
 from django.contrib.auth.models import User
-from guardian.shortcuts import assign_perm, remove_perm
 from rest_framework import status
 from rest_framework.test import APIClient
+from app import pending_actions
 
 import worker
 from app.models import Project
@@ -77,19 +72,146 @@ class TestApiTaskExternalImport(BootTransactionTestCase):
             'orthophoto': orthophoto_path(),
             'dsm': dsm_path(),
             'dtm': dtm_path(),
-            'pointcloud': pointcloud_path(),
+            'pointcloud': laz_path(),
             'texturedmodel': glb_path(),
         }
-        for asset_type in assets:
-            asset_file = assets[asset_type]
-            upload_file = open(asset_file, 'rb')
 
-            res = client.post("/api/projects/{}/tasks/import/external/init".format(project.id))
-            self.assertTrue(res.status_code, status.HTTP_200_OK)
-            self.assertTrue(isinstance(res.data['uuid'], str))
+        dest_assets = {
+            'orthophoto': "orthophoto.tif",
+            'dsm': "dsm.tif",
+            'dtm': "dtm.tif",
+            'pointcloud': "georeferenced_model.laz",
+            'texturedmodel': "textured_model.glb",
+        }
 
-            # res = client.post("/api/projects/{}/tasks/import".format(project.id), {
-            #     asset_type: [upload_file]
-            # }, format="multipart")
-            # self.assertEqual(res.status_code, status.HTTP_201_CREATED)
-            # assets_file.close()
+        swap_param = {
+            'orthophoto': ('dsm', True),
+            'dsm': ('pointcloud', False),
+            'dtm': ('pointcloud', False),
+            'pointcloud': ('texturedmodel', False),
+            'texturedmodel': ('pointcloud', False),
+        }
+
+        for test_asset_swap in [False, True]:
+            for asset_type in assets:
+                asset_file = assets[asset_type]
+                upload_file = open(asset_file, 'rb')
+
+                res = client.post("/api/projects/{}/tasks/import/external/init".format(project.id))
+                self.assertTrue(res.status_code, status.HTTP_200_OK)
+                uuid = res.data['uuid']
+                self.assertTrue(uuid, str)
+
+                # Try to upload wrong asset type
+                res = client.post("/api/projects/{}/tasks/import/external/upload".format(project.id), {
+                    "uuid": uuid,
+                    "file": [upload_file]
+                }, format="multipart")
+                self.assertTrue(res.status_code, status.HTTP_400_BAD_REQUEST)
+                upload_file.seek(0)
+
+                # Try invalid UUIDs
+                for invalid_uuid in ["invalid", "62b5f00b-c225-4779-b7e2-b666ff2b97f6", ""]:
+                    res = client.post("/api/projects/{}/tasks/import/external/upload".format(project.id), {
+                        "uuid": invalid_uuid,
+                        asset_type: [upload_file]
+                    }, format="multipart")
+                    self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                    upload_file.seek(0)
+
+                # Test file validation by swapping parameters
+                if test_asset_swap:
+                    asset_type_swapped, valid = swap_param[asset_type]
+                    res = client.post("/api/projects/{}/tasks/import/external/upload".format(project.id), {
+                        'uuid': uuid,
+                        asset_type_swapped: [upload_file]
+                    }, format="multipart")
+                    upload_file.seek(0)
+
+                    if valid:
+                        # Extension matches, but will fail later
+                        self.assertEqual(res.status_code, status.HTTP_200_OK)
+                    else:
+                        # Extension does not match
+                        self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+                    
+                    # Commit should fail validation
+                    res = client.post("/api/projects/{}/tasks/import/external/commit".format(project.id), {
+                        "uuid": uuid,
+                    })
+                    self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+                    # Skip rest of checks
+                    continue
+
+                # Valid asset type
+                res = client.post("/api/projects/{}/tasks/import/external/upload".format(project.id), {
+                    'uuid': uuid,
+                    asset_type: [upload_file]
+                }, format="multipart")
+                self.assertEqual(res.status_code, status.HTTP_200_OK)
+
+                # Verify file has been uploaded
+                dest_asset = dest_assets[asset_type]
+                uploaded_asset_file = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"external-import-{uuid}", dest_asset)
+                self.assertTrue(os.path.isfile(uploaded_asset_file))
+                upload_file.close()
+
+                self.assertTrue(res.data['uploaded'])
+                self.assertTrue(res.data['done'])
+                self.assertEqual(res.data['asset'], dest_asset)
+                
+                # Try commit with invalid UUID
+                for invalid_uuid in ["invalid", "62b5f00b-c225-4779-b7e2-b666ff2b97f6", ""]:
+                    res = client.post("/api/projects/{}/tasks/import/external/commit".format(project.id), {
+                        "uuid": invalid_uuid,
+                    })
+                    self.assertEqual(res.status_code, status.HTTP_400_BAD_REQUEST)
+
+                # Valid commit
+                res = client.post("/api/projects/{}/tasks/import/external/commit".format(project.id), {
+                    "uuid": uuid,
+                })
+                self.assertEqual(res.status_code, status.HTTP_201_CREATED)
+
+                # Properties are OK
+                self.assertTrue(isinstance(res.data['id'], str))
+                self.assertEqual(res.data['import_url'], "file://external")
+                self.assertEqual(res.data['status'], status_codes.RUNNING)
+                self.assertEqual(res.data['pending_action'], pending_actions.IMPORT)
+
+                # Process
+                worker.tasks.process_pending_tasks()
+                
+                # Task has completed import
+                task = Task.objects.get(pk=res.data['id'])
+                self.assertEqual(task.status, status_codes.COMPLETED)
+                self.assertIsNone(task.pending_action)
+                
+                # Task assets are where they should be
+                task_asset = task.get_asset_download_path(dest_asset)
+                self.assertTrue(os.path.isfile(task_asset))
+
+                # Uploaded file was moved
+                self.assertFalse(os.path.isfile(uploaded_asset_file))
+
+                # Tmp folder was deleted
+                self.assertFalse(os.path.isdir(os.path.dirname(uploaded_asset_file)))
+
+                # Parent of tmp folder is still there (just checking...)
+                self.assertTrue(os.path.isdir(os.path.abspath(os.path.join(os.path.dirname(uploaded_asset_file), ".."))))
+            
+        # Cannot commit without uploading anything
+        res = client.post("/api/projects/{}/tasks/import/external/init".format(project.id))
+        self.assertTrue(res.status_code, status.HTTP_200_OK)
+        uuid = res.data['uuid']
+        self.assertTrue(uuid, str)
+
+        res = client.post("/api/projects/{}/tasks/import/external/commit".format(project.id), {
+            'uuid': uuid
+        })
+        self.assertTrue(res.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(uuid, str)
+
+
+        

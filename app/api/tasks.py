@@ -843,6 +843,14 @@ class TaskExternalImportUpload(APIView):
         uuid = request.data.get('dzuuid') 
         total_chunk_count = request.data.get('dztotalchunkcount', None)
 
+        # 50% of the time, raise an exception
+        # import random
+        # if random.random() < 0.5:
+        #     import time
+        #     time.sleep(2)
+        #     return Response('', status=524)
+        #     raise exceptions.ValidationError(detail=_("Random upload failure for testing"))
+
         # Chunked upload?
         tmp_upload_file = None
         if len(files) > 0 and chunk_index is not None and uuid is not None and total_chunk_count is not None:
@@ -954,6 +962,8 @@ class TaskExternalImportCommit(APIView):
                             dst_dir = os.path.dirname(dst_path)
                             os.makedirs(dst_dir, exist_ok=True)
                             shutil.move(src_path, dst_path)
+
+            worker_tasks.process_task.delay(task.id)
 
             serializer = TaskSerializer(task)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
