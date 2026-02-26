@@ -525,7 +525,7 @@ class TaskListItem extends React.Component {
       };
 
       if (showAssetButtons){
-        if (task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1){
+        if (task.available_assets.indexOf("orthophoto.tif") !== -1 || task.available_assets.indexOf("dsm.tif") !== -1 || task.available_assets.indexOf("dtm.tif") !== -1){
           addActionButton(" " + _("Map"), "btn-primary", "fa fa-globe fa-fw", () => {
             location.href = `/map/project/${task.project}/task/${task.id}/`;
           });
@@ -534,6 +534,7 @@ class TaskListItem extends React.Component {
         }
 
         if (task.available_assets.indexOf("georeferenced_model.laz") !== -1 || 
+            task.available_assets.indexOf("georeferenced_model.las") !== -1 ||
             task.available_assets.indexOf("textured_model.glb") !== -1 ||
             task.available_assets.indexOf("textured_model.zip") !== -1){
           addActionButton(" " + _("3D Model"), "btn-primary", "fa fa-cube fa-fw", () => {

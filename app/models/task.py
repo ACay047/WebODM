@@ -376,7 +376,7 @@ class Task(models.Model):
         elif self.dsm_extent is not None:
             return self.dsm_extent.extent
         elif self.dtm_extent is not None:
-            return self.dsm_extent.extent
+            return self.dtm_extent.extent
         else:
             return None
 
@@ -603,7 +603,10 @@ class Task(models.Model):
         # Import assets file from mounted system volume (media-dir)/imports by relative path.
         # Import file from relative path.
         if self.import_url and not os.path.exists(zip_path):
-            if self.import_url.startswith("file://"):
+            if self.import_url == "file://external":
+                # External asset import, files should already be in place
+                pass 
+            elif self.import_url.startswith("file://"):
                 imports_folder_path = os.path.join(settings.MEDIA_ROOT, "imports")
                 unsafe_path_to_import_file = os.path.join(settings.MEDIA_ROOT, "imports", self.import_url.replace("file://", ""))
                 # check is file placed in shared media folder in /imports directory without traversing
@@ -949,50 +952,56 @@ class Task(models.Model):
 
     def extract_assets_and_complete(self):
         """
-        Extracts assets/all.zip, populates task fields where required and assure COGs
+        Extracts assets/all.zip (if available), populates task fields where required and assure COGs
         It will raise a zipfile.BadZipFile exception if the archive is corrupted.
         :return:
         """
         assets_dir = self.assets_path("")
         zip_path = self.assets_path("all.zip")
+        is_backup = False
 
-        # Extract from zip
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zip_h:
-                zip_h.extractall(assets_dir)
-        except zlib.error as e:
-            raise zipfile.BadZipFile(str(e))
-
-        logger.info("Extracted all.zip for {}".format(self))
-        
-        os.remove(zip_path)
-
-        # Check if this looks like a backup file, in which case we need to move the files
-        # a directory level higher
-        is_backup = os.path.isfile(self.assets_path("data", "backup.json")) and os.path.isdir(self.assets_path("assets"))
-        if is_backup:
-            logger.info("Restoring from backup")
+        if os.path.isfile(zip_path):
+            # Extract from zip
             try:
-                tmp_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"{self.id}.backup")
-                
-                shutil.move(assets_dir, tmp_dir)
-                shutil.rmtree(self.task_path(""))
-                shutil.move(tmp_dir, self.task_path(""))
-            except shutil.Error as e:
-                logger.warning("Cannot restore from backup: %s" % str(e))
-                raise NodeServerError("Cannot restore from backup")
-        else:
-            # Check if the zip file contained a top level directory
-            # which shouldn't be there and try to fix the structure
-            top_level = [os.path.join(assets_dir, d) for d in os.listdir(assets_dir)]
-            if len(top_level) == 1 and os.path.isdir(top_level[0]) and (not top_level[0].endswith("odm_orthophoto")):
-                second_level = [os.path.join(top_level[0], f) for f in os.listdir(top_level[0])]
-                if len(second_level) > 0:
-                    logger.info("Top level directory found in imported archive, attempting to fix")
-                    for f in second_level:
-                        shutil.move(f, assets_dir)
-                    shutil.rmtree(top_level[0])
+                with zipfile.ZipFile(zip_path, "r") as zip_h:
+                    zip_h.extractall(assets_dir)
+            except zlib.error as e:
+                raise zipfile.BadZipFile(str(e))
 
+            logger.info("Extracted all.zip for {}".format(self))
+            
+            os.remove(zip_path)
+
+            # Check if this looks like a backup file, in which case we need to move the files
+            # a directory level higher
+            is_backup = os.path.isfile(self.assets_path("data", "backup.json")) and os.path.isdir(self.assets_path("assets"))
+            if is_backup:
+                logger.info("Restoring from backup")
+                try:
+                    tmp_dir = os.path.join(settings.FILE_UPLOAD_TEMP_DIR, f"{self.id}.backup")
+                    
+                    shutil.move(assets_dir, tmp_dir)
+                    shutil.rmtree(self.task_path(""))
+                    shutil.move(tmp_dir, self.task_path(""))
+                except shutil.Error as e:
+                    logger.warning("Cannot restore from backup: %s" % str(e))
+                    raise NodeServerError("Cannot restore from backup")
+            else:
+                # Check if the zip file contained a top level directory
+                # which shouldn't be there and try to fix the structure
+                top_level = [os.path.join(assets_dir, d) for d in os.listdir(assets_dir)]
+                if len(top_level) == 1 and os.path.isdir(top_level[0]) and (not top_level[0].endswith("odm_orthophoto")):
+                    second_level = [os.path.join(top_level[0], f) for f in os.listdir(top_level[0])]
+                    if len(second_level) > 0:
+                        logger.info("Top level directory found in imported archive, attempting to fix")
+                        for f in second_level:
+                            shutil.move(f, assets_dir)
+                        shutil.rmtree(top_level[0])
+
+        elif self.import_url != "file://external":
+            # all.zip should be missing only when doing external data import
+            logger.warning("Cannot find assets archive for {} ({})".format(self, zip_path))
+            raise NodeServerError("Cannot import task")
 
         # Populate *_extent fields
         extent_fields = self.get_extent_fields()
@@ -1096,9 +1105,10 @@ class Task(models.Model):
                 return file 
     
     def get_point_cloud(self):
-        f = os.path.realpath(self.assets_path(self.ASSETS_MAP["georeferenced_model.laz"]))
-        if os.path.isfile(f):
-            return f
+        for asset in ["georeferenced_model.laz", "georeferenced_model.las"]:
+            f = os.path.realpath(self.assets_path(self.ASSETS_MAP[asset]))
+            if os.path.isfile(f):
+                return f
 
     def get_tile_path(self, tile_type, z, x, y):
         return self.assets_path("{}_tiles".format(tile_type), z, x, "{}.png".format(y))
