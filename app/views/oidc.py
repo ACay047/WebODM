@@ -5,6 +5,7 @@ import requests
 from django.contrib import messages
 from django.contrib.auth import login
 from django.contrib.auth.models import User
+from django.contrib.auth.models import Group
 from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.crypto import get_random_string
@@ -68,6 +69,13 @@ def oidc_login(request, provider_index):
         'scope': 'openid email',
         'state': state,
     }
+    
+    if settings.OIDC_UPDATE_PROFILE:
+        params['scope'] += ' ' + 'profile'
+
+    if settings.OIDC_CUSTOM_SCOPES:
+        for custom_scope in settings.OIDC_CUSTOM_SCOPES:
+            params['scope'] += ' ' + custom_scope
 
     return redirect('%s?%s' % (provider['auth_endpoint'], urlencode(params)))
 
@@ -160,7 +168,7 @@ def oidc_callback(request):
             elif ae == email:
                 authorized = True
                 break
-    
+
     if not authorized:
         logger.warning('OIDC email not authorized: %s' % email)
         messages.warning(request, _('SSO login failed.'))
@@ -181,6 +189,46 @@ def oidc_callback(request):
     if not user.is_active:
         messages.warning(request, _('This account is disabled. Please contact an administrator.'))
         return redirect(settings.LOGIN_URL)
+
+    if settings.OIDC_UPDATE_PROFILE:
+        given_name = claims.get('given_name', '')
+        family_name = claims.get('family_name', '')
+        user.email = email
+        user.first_name = given_name
+        user.last_name = family_name
+        user.save()
+
+    if settings.OIDC_GROUPS_CLAIMS:   
+        groups_OIDC = []
+        for claim in settings.OIDC_GROUPS_CLAIMS:
+            group_names = claims.get(claim)
+            if isinstance(group_names, list):
+                for group_name in group_names:
+                    try:
+                        groups_OIDC.append(group_name)
+                        group_to_add = Group.objects.get(name=group_name)
+                        user.groups.add(group_to_add)
+                    except Group.DoesNotExist:
+                        logger.warning('Group does not exist: %s' % group_name)
+                        if settings.OIDC_CREATE_GROUPS:
+                            group_to_add, added = Group.objects.get_or_create(name=group_name)
+                            logger.info('Group created: %s' % group_name)
+                            user.groups.add(group_to_add)
+            elif isinstance(group_names, str):
+                group_name = group_names
+                try:
+                    groups_OIDC.append(group_name)
+                    group_to_add = Group.objects.get(name=group_name)
+                    user.groups.add(group_to_add)
+                except Group.DoesNotExist:
+                    logger.warning('Group does not exist: %s' % group_name)
+                    if settings.OIDC_CREATE_GROUPS:
+                        group_to_add, added = Group.objects.get_or_create(name=group_name)
+                        logger.info('Group created: %s' % group_name)
+                        user.groups.add(group_to_add)
+        for group in list(user.groups.all()):
+            if (group.name != 'Default') and (group.name not in settings.OIDC_IGNORE_GROUPS) and (group.name not in groups_OIDC):
+                user.groups.remove(group)
 
     login(request, user, backend='django.contrib.auth.backends.ModelBackend')
 

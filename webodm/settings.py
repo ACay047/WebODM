@@ -374,6 +374,24 @@ OIDC_AUTH_PROVIDERS = []
 # e.g. ["@myorg.com", "exactuser@otherorg.com"]
 OIDC_AUTH_EMAILS = None
 
+# When turned on, updates the user's profile information in WebODM from OIDC profile data
+# Will additionally request the "profile" OIDC scope
+OIDC_UPDATE_PROFILE = False
+
+# List any custom OIDC scopes needed for custom claims
+OIDC_CUSTOM_SCOPES = []
+
+# OIDC Claims to check for automatic group assignments
+# List the names of the OIDC claims to check, the values returned in those claims should
+# be the names of the groups to be assigned
+OIDC_GROUPS_CLAIMS = []
+
+# Create any groups returned in the claims listed in OIDC_GROUPS_CLAIMS that don't exist
+OIDC_CREATE_GROUPS = False
+
+# List any manually managed groups other than 'Default' that you don't want OIDC users removed from
+OIDC_IGNORE_GROUPS = []
+
 # Enable cluster mode for this instance by setting an integer ID >= 1
 CLUSTER_ID = None
 
