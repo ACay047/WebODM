@@ -188,7 +188,7 @@ const OPTION_GROUP_MAP = {
     // MVS
     'pc-filter': { group: 'mvs', subgroup: 'filtering' },
     'pc-skip-geometric': { group: 'mvs', subgroup: 'filtering' },
-    'pc-skip-textureless': { group: 'mvs', subgroup: 'filtering' },
+    'pc-textureless': { group: 'mvs', subgroup: 'filtering' },
     'pc-sample': { group: 'mvs', subgroup: 'filtering' },
     
     'pc-classify': { group: 'mvs', subgroup: 'postprocess' },
